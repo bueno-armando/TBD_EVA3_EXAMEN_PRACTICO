@@ -1028,6 +1028,136 @@ INSERT INTO `registro_pacientes` VALUES
 (174,58,116,28,'2017-06-15','Scheuermann\'s Kyphosis (Kyphosis)',NULL);
 /*!40000 ALTER TABLE `registro_pacientes` ENABLE KEYS */;
 UNLOCK TABLES;
+
+--
+-- Dumping events for database 'Hospital'
+--
+
+--
+-- Dumping routines for database 'Hospital'
+--
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+/*!50003 DROP FUNCTION IF EXISTS `CALCULAR_DIGITO_VERIFICADOR` */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` FUNCTION `CALCULAR_DIGITO_VERIFICADOR`(nss_base VARCHAR(10)) RETURNS int(11)
+    DETERMINISTIC
+BEGIN
+    DECLARE suma_total INT DEFAULT 0;
+    DECLARE posicion INT DEFAULT 1;
+    DECLARE multiplicador INT;
+    DECLARE valor INT;
+    
+    WHILE posicion <= CHAR_LENGTH(nss_base) DO
+        SET multiplicador = CASE WHEN MOD(posicion, 2) = 1 THEN 1 ELSE 2 END;
+        SET valor = SUBSTRING(nss_base, posicion, 1) * multiplicador;
+        -- caso: reducir a un solo digito cuando es > 10
+        IF valor >= 10 THEN
+            SET valor = FLOOR(valor / 10) + MOD(valor, 10);
+        END IF;
+        -- suma
+        SET suma_total = suma_total + valor;
+        SET posicion = posicion + 1;
+    END WHILE;
+    -- calculo del faltante (y hacer return a la vez)
+    RETURN (10 - MOD(suma_total, 10)) MOD 10;
+END ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+/*!50003 DROP FUNCTION IF EXISTS `GENERAR_NUMERO_SEGURO` */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` FUNCTION `GENERAR_NUMERO_SEGURO`(fecha_nacimiento DATE) RETURNS varchar(11) CHARSET utf8mb4 COLLATE utf8mb4_unicode_ci
+    DETERMINISTIC
+BEGIN
+    DECLARE oficina_id VARCHAR(2);
+    DECLARE anio_registro INT;
+    DECLARE nacimiento_corto VARCHAR(2);
+    DECLARE numero_consecutivo INT;
+    DECLARE digito_final INT;
+    DECLARE nss_completo_base VARCHAR(10);
+
+    -- número oficina (RANDOM)
+    SET oficina_id = LPAD(FLOOR(RAND() * 100), 2, '0');
+    -- año de inscripción (CALCULADO)
+    SET anio_registro = FLOOR(YEAR(fecha_nacimiento) + 15 + RAND() * (YEAR(CURDATE()) - (YEAR(fecha_nacimiento) + 15)));
+    -- tomar 2 dig. de la fecha de nacimientos
+    SET nacimiento_corto = RIGHT(YEAR(fecha_nacimiento), 2);
+
+    -- meter al siguiente consecutivo
+    SELECT consecutivo INTO numero_consecutivo 
+    FROM CONSECUTIVOS 
+    ORDER BY consecutivo DESC LIMIT 1;
+    INSERT INTO CONSECUTIVOS (consecutivo) VALUES (numero_consecutivo + 1);
+
+    -- pre nss
+    SET nss_completo_base = CONCAT(oficina_id, RIGHT(anio_registro, 2), nacimiento_corto, numero_consecutivo);
+	-- dig. verif. (YA ESTÁ LA FUNCIÓN)
+    SET digito_final = CALCULAR_DIGITO_VERIFICADOR(nss_completo_base);
+
+	-- juntar todo y hacer el return
+    RETURN CONCAT(nss_completo_base, digito_final);
+END ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
+/*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
+/*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
+/*!50003 DROP PROCEDURE IF EXISTS `ACTUALIZAR_PAGOS` */;
+/*!50003 SET @saved_cs_client      = @@character_set_client */ ;
+/*!50003 SET @saved_cs_results     = @@character_set_results */ ;
+/*!50003 SET @saved_col_connection = @@collation_connection */ ;
+/*!50003 SET character_set_client  = utf8mb4 */ ;
+/*!50003 SET character_set_results = utf8mb4 */ ;
+/*!50003 SET collation_connection  = utf8mb4_uca1400_ai_ci */ ;
+DELIMITER ;;
+CREATE DEFINER=`root`@`localhost` PROCEDURE `ACTUALIZAR_PAGOS`(IN id_paciente INT)
+BEGIN
+	-- efectivos
+    SELECT
+        'EFECTIVO' AS TIPO_PAGO, FORMAT(SUM(CASE WHEN fp.tipo_pago = 'EFECTIVO' THEN fp.monto ELSE 0 END), 2) AS MONTO
+    UNION ALL
+    -- cheques
+    SELECT
+        'CHEQUE', FORMAT(SUM(CASE WHEN fp.tipo_pago = 'CHEQUE' THEN fp.monto ELSE 0 END), 2)
+    UNION ALL
+    -- tarjetas cred.
+    SELECT
+        'TARJETA CRÉDITO', FORMAT(SUM(CASE WHEN fp.tipo_pago = 'TARJETA CRÉDITO' THEN fp.monto ELSE 0 END), 2)
+    UNION ALL
+    -- tarjetas deb.
+    SELECT
+        'TARJETA DÉBITO', FORMAT(SUM(CASE WHEN fp.tipo_pago = 'TARJETA DÉBITO' THEN fp.monto ELSE 0 END), 2)
+    UNION ALL
+    -- no pago
+    SELECT
+        'SIN PAGO', FORMAT(SUM(CASE WHEN fp.tipo_pago = 'SIN PAGO' THEN fp.monto ELSE 0 END), 2)
+    FROM formas_pago_pacientes fp
+    WHERE fp.paciente_id = id_paciente;
+END ;;
+DELIMITER ;
+/*!50003 SET sql_mode              = @saved_sql_mode */ ;
+/*!50003 SET character_set_client  = @saved_cs_client */ ;
+/*!50003 SET character_set_results = @saved_cs_results */ ;
+/*!50003 SET collation_connection  = @saved_col_connection */ ;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
@@ -1038,4 +1168,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*M!100616 SET NOTE_VERBOSITY=@OLD_NOTE_VERBOSITY */;
 
--- Dump completed on 2024-12-08 17:24:35
+-- Dump completed on 2024-12-08 17:29:21
